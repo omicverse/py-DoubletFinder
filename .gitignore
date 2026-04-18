@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# R DoubletFinder reference clone (not our code — kept locally only)
+DoubletFinder-ref/
+
+# Notebook / benchmark artifacts (regenerated on demand)
+examples/compare_out/
+examples/data/
+examples/*.executed.ipynb
+Rplots.pdf
+Intersections_*.txt

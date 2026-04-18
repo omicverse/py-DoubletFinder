@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "doubletfinder-py"
+version = "0.1.0"
+description = "Pure-Python DoubletFinder — computational doublet detection in scRNA-seq via artificial-doublet pANN scoring, AnnData-native."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Zehua Zeng", email = "starlitnightly@163.com" },
+]
+keywords = [
+    "single-cell", "scRNA-seq", "doublet", "doubletfinder",
+    "pANN", "scanpy", "anndata",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Creative Commons Zero v1.0 Universal",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+
+dependencies = [
+    "numpy>=1.23",
+    "scipy>=1.10",
+    "pandas>=1.5",
+    "anndata>=0.9",
+    "scikit-learn>=1.2",
+    "matplotlib>=3.6",
+    "seaborn>=0.12",
+    "tqdm",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "pytest-cov", "ruff"]
+scanpy = ["scanpy>=1.9"]
+
+[project.urls]
+Homepage = "https://github.com/omicverse/py-DoubletFinder"
+Repository = "https://github.com/omicverse/py-DoubletFinder"
+Issues = "https://github.com/omicverse/py-DoubletFinder/issues"
+"Upstream R package" = "https://github.com/chris-mcginnis-ucsf/DoubletFinder"
+"Upstream (omicverse)" = "https://github.com/Starlitnightly/omicverse"
+
+[tool.setuptools.packages.find]
+include = ["doubletfinder_py*"]
+exclude = ["tests*", "examples*", "DoubletFinder-ref*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::FutureWarning",
+    "ignore::RuntimeWarning",
+]
