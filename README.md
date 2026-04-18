@@ -1,4 +1,4 @@
-# doubletfinder-py
+# pydoubletfinder
 
 A **pure-Python re-implementation of [DoubletFinder](https://github.com/chris-mcginnis-ucsf/DoubletFinder)** (McGinnis et al., *Cell Systems* 2019) for computational doublet detection in single-cell RNA-seq data.
 
@@ -12,14 +12,14 @@ A **pure-Python re-implementation of [DoubletFinder](https://github.com/chris-mc
 ## Install
 
 ```bash
-pip install doubletfinder-py
+pip install pydoubletfinder
 ```
 
 ## Quick-start (class API)
 
 ```python
 import anndata as ad
-from doubletfinder_py import DoubletFinder
+from pydoubletfinder import DoubletFinder
 
 adata = ad.read_h5ad("mydata.h5ad")          # cells × genes, raw counts in .X
 
@@ -43,7 +43,7 @@ adata.obs[[c for c in adata.obs.columns if c.startswith("DF.")]]
 ## Low-level functional API (mirrors R one-to-one)
 
 ```python
-from doubletfinder_py import (
+from pydoubletfinder import (
     param_sweep, summarize_sweep, find_pK,
     doublet_finder, model_homotypic,
     bimodality_coefficient,
@@ -82,7 +82,7 @@ homotypic = model_homotypic(adata.obs["cluster"])
 The pipeline's randomness has two sources: which cell pairs become artificial doublets, and the PCA embedding of the merged matrix. To get identical outputs to an R run, provide both directly:
 
 ```python
-from doubletfinder_py import doublet_finder
+from pydoubletfinder import doublet_finder
 
 result = doublet_finder(
     pca_coord=r_pca_embedding,      # from Seurat's reductions$pca@cell.embeddings

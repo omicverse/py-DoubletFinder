@@ -9,7 +9,7 @@ import pytest
 
 
 def test_import_surface():
-    import doubletfinder_py as df
+    import pydoubletfinder as df
 
     for sym in (
         "DoubletFinder", "param_sweep", "summarize_sweep", "find_pK",
@@ -21,7 +21,7 @@ def test_import_surface():
 
 
 def test_model_homotypic_matches_r_formula():
-    from doubletfinder_py import model_homotypic
+    from pydoubletfinder import model_homotypic
 
     # sum of squared frequencies: {A:3, B:1} -> (3/4)^2 + (1/4)^2 = 0.625
     assert model_homotypic(["A", "A", "A", "B"]) == pytest.approx(0.625)
@@ -30,7 +30,7 @@ def test_model_homotypic_matches_r_formula():
 def test_skewness_kurtosis_against_handcomputed():
     """Check skewness/kurtosis on a small vector against an R-equivalent
     direct computation."""
-    from doubletfinder_py import kurtosis, skewness
+    from pydoubletfinder import kurtosis, skewness
 
     x = np.array([1.0, 2.0, 2.5, 3.0, 5.0])
     # Replicate the R formula by hand:
@@ -46,7 +46,7 @@ def test_skewness_kurtosis_against_handcomputed():
 
 
 def test_bimodality_on_bimodal_sample_is_high():
-    from doubletfinder_py import bimodality_coefficient
+    from pydoubletfinder import bimodality_coefficient
     rng = np.random.default_rng(0)
     bimodal = np.concatenate([rng.normal(-3, 0.5, 400), rng.normal(3, 0.5, 400)])
     uniform = rng.uniform(-3, 3, 800)
@@ -57,7 +57,7 @@ def test_doublet_finder_on_synthetic_pca():
     """Synthetic PCA where artificial doublets cluster with each other —
     ensures pANN is >0 for cells near the artificial cluster and classification
     picks up the nExp cells closest to it."""
-    from doubletfinder_py import doublet_finder
+    from pydoubletfinder import doublet_finder
 
     rng = np.random.default_rng(42)
     n_real = 50
@@ -81,7 +81,7 @@ def test_doublet_finder_on_synthetic_pca():
 
 
 def test_reuse_pANN_rethresholds_without_pca():
-    from doubletfinder_py import doublet_finder
+    from pydoubletfinder import doublet_finder
 
     pann = np.array([0.1, 0.5, 0.3, 0.9, 0.2])
     res = doublet_finder(
@@ -96,7 +96,7 @@ def test_reuse_pANN_rethresholds_without_pca():
 
 def test_summarize_sweep_and_find_pK_shape():
     """End-to-end on a tiny synthetic dataset — just checks shapes, not values."""
-    from doubletfinder_py import find_pK, param_sweep, summarize_sweep, DEFAULT_PN_GRID
+    from pydoubletfinder import find_pK, param_sweep, summarize_sweep, DEFAULT_PN_GRID
 
     rng = np.random.default_rng(0)
     n_real = 80

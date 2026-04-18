@@ -65,7 +65,7 @@ def r_ref_dir(tmp_path_factory) -> Path | None:
 def test_pann_and_classifications_match_R(r_ref_dir: Path):
     """Given R's PCA + R's artificial doublet indices, Python's pANN & calls
     must match R element-for-element."""
-    from doubletfinder_py import doublet_finder
+    from pydoubletfinder import doublet_finder
 
     meta = json.loads((r_ref_dir / "meta.json").read_text())
     pca = pd.read_csv(r_ref_dir / "pca_coord.tsv", sep="\t", index_col=0)
@@ -83,7 +83,7 @@ def test_pann_and_classifications_match_R(r_ref_dir: Path):
 
 def test_bimodality_matches_R(r_ref_dir: Path):
     """Check bimodality_coefficient on a KDE-evaluated pANN — must match R."""
-    from doubletfinder_py import bimodality_coefficient, bkde, approxfun
+    from pydoubletfinder import bimodality_coefficient, bkde, approxfun
 
     pann = pd.read_csv(r_ref_dir / "bc_input.tsv", sep="\t")["pann"].values
     expected_bc = float((r_ref_dir / "bc_expected.txt").read_text().strip())

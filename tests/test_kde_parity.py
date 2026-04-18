@@ -1,6 +1,6 @@
 """KernSmooth::bkde parity tests.
 
-Confirms that ``doubletfinder_py.kde.bkde`` produces densities that match
+Confirms that ``pydoubletfinder.kde.bkde`` produces densities that match
 R's ``KernSmooth::bkde`` closely on a few hand-checked vectors. We don't
 require R to run these — instead we check mathematical properties that
 any correct binned KDE must satisfy (integration ≈ 1, default bandwidth
@@ -12,7 +12,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from doubletfinder_py.kde import _default_bandwidth, bkde
+from pydoubletfinder.kde import _default_bandwidth, bkde
 
 
 def test_default_bandwidth_matches_formula():

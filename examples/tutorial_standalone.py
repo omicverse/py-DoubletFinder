@@ -7,7 +7,7 @@ from __future__ import annotations
 import numpy as np
 import scanpy as sc
 
-from doubletfinder_py import DoubletFinder, model_homotypic
+from pydoubletfinder import DoubletFinder, model_homotypic
 
 
 def main() -> None:

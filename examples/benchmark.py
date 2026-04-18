@@ -1,4 +1,4 @@
-"""Head-to-head speed benchmark: R DoubletFinder vs doubletfinder_py.
+"""Head-to-head speed benchmark: R DoubletFinder vs pydoubletfinder.
 
 Runs both on the pbmc3k counts TSV that examples/compare_R_vs_Python.ipynb
 already produced. Reports wall time for:
@@ -22,7 +22,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-import doubletfinder_py as dfp
+import pydoubletfinder as dfp
 
 
 HERE = Path(__file__).parent
@@ -130,7 +130,7 @@ def time_python_end_to_end(nExp: int, n_cells: int, runs: int = 3) -> tuple[floa
         c1, c2, _ = dfp.sample_artificial_doublets(n_real_cells=n_real, pN=0.25, rng=rng)
         doublets = (counts_gxc[:, c1] + counts_gxc[:, c2]) / 2.0
         merged = np.concatenate([counts_gxc, doublets], axis=1)
-        from doubletfinder_py.preprocessing import preprocess_and_pca
+        from pydoubletfinder.preprocessing import preprocess_and_pca
         emb = preprocess_and_pca(merged, n_pcs=10, n_top_genes=2000, random_state=42)
         pre_times.append(time.perf_counter() - t0)
 
