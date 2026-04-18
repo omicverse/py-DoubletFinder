@@ -14,6 +14,7 @@ DoubletFinder-ref/
 # Notebook / benchmark artifacts (regenerated on demand)
 examples/compare_out/
 examples/data/
+data/
 examples/*.executed.ipynb
 Rplots.pdf
 Intersections_*.txt
