@@ -15,6 +15,5 @@ DoubletFinder-ref/
 examples/compare_out/
 examples/data/
 data/
-examples/*.executed.ipynb
 Rplots.pdf
 Intersections_*.txt
