@@ -68,6 +68,9 @@ class DoubletFinder:
         pK_grid: np.ndarray | None = None,
         n_top_genes: int = 2000,
         max_cells: int = 10_000,
+        knn_fn=None,
+        knn_backend: str = "auto",
+        progress: bool = True,
     ) -> "DoubletFinder":
         """Run the pN/pK parameter sweep.
 
@@ -120,6 +123,9 @@ class DoubletFinder:
             n_real_cells=n_real,
             pN_grid=pN_grid,
             pK_grid=pK_grid,
+            knn_fn=knn_fn,
+            knn_backend=knn_backend,
+            progress=progress,
         )
         return self
 
@@ -149,6 +155,8 @@ class DoubletFinder:
         PCs: int = 10,
         n_top_genes: int = 2000,
         reuse_pANN: str | None = None,
+        knn_fn=None,
+        knn_backend: str = "auto",
     ) -> AnnData:
         """Run the final ``doubletFinder`` scoring + classification step.
 
@@ -196,6 +204,7 @@ class DoubletFinder:
                 pN=pN, pK=pK, nExp=int(nExp),
                 annotations=ann_vec,
                 doublet_types1=d1, doublet_types2=d2,
+                knn_fn=knn_fn, knn_backend=knn_backend,
             )
 
         self.adata.obs[result.column_name_pANN] = result.pANN
