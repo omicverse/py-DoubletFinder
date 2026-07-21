@@ -50,26 +50,60 @@ def model_homotypic(annotations) -> float:
 # ---------------------------------------------------------------------------
 # pANN kernel — the single place where neighborhood counts are computed
 # ---------------------------------------------------------------------------
-def _ordered_neighbor_matrix(pca_coord: np.ndarray, n_real_cells: int) -> np.ndarray:
-    """Return an ``nCells x n_real_cells`` matrix whose column ``i`` lists the
-    indices of all cells sorted by PC-space Euclidean distance to real cell ``i``.
+def _compute_knn(pca, n_neighbors, knn_fn=None, knn_backend="auto"):
+    """Top-``n_neighbors`` nearest neighbours of every row of ``pca`` (self at
+    column 0). Returns ``(dist, idx)`` both ``(n, n_neighbors)``, distance-sorted.
 
-    Reproduces the R ``for (i in 1:n.real.cells) dist.mat[,i] <- order(dist.mat[,i])``
-    block — i.e. the column-wise ``order`` over ``fields::rdist`` restricted to
-    the first ``n.real.cells`` columns.
-
-    Python note: we use 1-based-style indices (``+1``) so that direct comparisons
-    against R-saved outputs work without off-by-one translation elsewhere.
-    Internally we flip back to 0-based when slicing numpy arrays.
+    Backends: an injectable ``knn_fn(X, n_neighbors)->(dist, idx)`` (e.g.
+    omicverse's chunked-GPU kNN — **exact**, avoids the O(N²) distance matrix);
+    ``'auto'`` uses exact sklearn below ~10^5 rows and approximate pynndescent
+    (O(N log N)) above, so million-cell atlases stay tractable.
     """
-    from scipy.spatial.distance import cdist
-    # Euclidean distances from every cell to the first ``n_real_cells`` cells.
-    # scipy's cdist is a compiled C routine — ~5-10x faster than numpy broadcast
-    # for the (n_cells x n_real_cells) matrices DoubletFinder sees.
-    dist = cdist(pca_coord, pca_coord[:n_real_cells], metric="euclidean")
-    # Column-wise argsort gives neighbor ordering; add 1 for R parity
-    order = np.argsort(dist, axis=0, kind="stable") + 1
-    return order
+    pca = np.asarray(pca, dtype=np.float32)
+    n = pca.shape[0]
+    n_neighbors = int(min(n_neighbors, n))
+    if knn_fn is not None:
+        dist, idx = knn_fn(pca, n_neighbors)
+        return np.asarray(dist), np.asarray(idx)
+    backend = knn_backend
+    if backend == "auto":
+        backend = "pynndescent" if n > 100000 else "sklearn"
+    if backend == "pynndescent":
+        try:
+            from pynndescent import NNDescent
+            index = NNDescent(pca, n_neighbors=n_neighbors, metric="euclidean",
+                              random_state=0, low_memory=True)
+            idx, dist = index.neighbor_graph
+            o = np.argsort(dist, axis=1)
+            return np.take_along_axis(dist, o, 1), np.take_along_axis(idx, o, 1)
+        except Exception:
+            backend = "sklearn"
+    from sklearn.neighbors import NearestNeighbors
+    nn = NearestNeighbors(n_neighbors=n_neighbors, metric="euclidean").fit(pca)
+    return nn.kneighbors(pca, return_distance=True)
+
+
+def _ordered_neighbor_matrix(pca_coord: np.ndarray, n_real_cells: int,
+                             n_neighbors=None, knn_fn=None,
+                             knn_backend: str = "auto") -> np.ndarray:
+    """Neighbour-ordering matrix for the first ``n_real_cells`` cells, 1-based
+    (row 0 = the cell itself). Shape ``(n_neighbors, n_real_cells)``.
+
+    When ``n_neighbors`` is given, only the top-``n_neighbors`` neighbours are
+    computed with a **kNN** (query=real cells, index=all cells) instead of the
+    old full ``cdist`` distance matrix + column-wise ``argsort`` — the latter is
+    O(N²) memory/time and OOMs at ~10^5 cells. Legacy full-order path is kept
+    (``n_neighbors=None``) for small exact runs / reference.
+    """
+    if n_neighbors is None:
+        from scipy.spatial.distance import cdist
+        dist = cdist(pca_coord, pca_coord[:n_real_cells], metric="euclidean")
+        return np.argsort(dist, axis=0, kind="stable") + 1
+    # Self-kNN over all cells; keep only the real-cell rows and lay them out
+    # column-per-real-cell (1-based) to match the legacy order-matrix contract.
+    _, idx = _compute_knn(pca_coord, n_neighbors, knn_fn=knn_fn,
+                          knn_backend=knn_backend)
+    return idx[:n_real_cells].T.astype(np.int64) + 1
 
 
 def _compute_pann_from_order(
@@ -150,6 +184,8 @@ def doublet_finder(
     doublet_types1: Sequence | None = None,
     doublet_types2: Sequence | None = None,
     reuse_pANN: np.ndarray | None = None,
+    knn_fn=None,
+    knn_backend: str = "auto",
 ) -> DoubletFinderResult:
     """Python port of R ``doubletFinder`` — pANN + classification.
 
@@ -197,25 +233,14 @@ def doublet_finder(
     if k < 1:
         raise ValueError(f"pK={pK} yields k<1 at nCells={nCells}")
 
-    if annotations is None:
-        # Single-pK fast path: we only need the top (k+1) neighbors per cell,
-        # not the full ordering. argpartition is O(N) vs argsort's O(N log N).
-        from scipy.spatial.distance import cdist
-        dist = cdist(pca_coord, pca_coord[:n_real_cells], metric="euclidean")
-        # Partition so the smallest (k+1) distances sit in rows [0, k+1)
-        top = np.argpartition(dist, k + 1, axis=0)[: k + 1] + 1
-        # Self is row 0 of the partitioned block — drop it by masking
-        # 1-based self index = column_idx + 1, compare against top
-        self_row = np.arange(n_real_cells)[None, :] + 1
-        is_self = top == self_row
-        # Subtract the self's contribution when counting artificial neighbors
-        pANN = (
-            (top > n_real_cells).sum(axis=0) - (is_self & (self_row > n_real_cells)).sum(axis=0)
-        ).astype(np.float64) / float(k)
-        order_mat = None  # signal we're skipping the full sort
-    else:
-        order_mat = _ordered_neighbor_matrix(pca_coord, n_real_cells)
-        pANN = _compute_pann_from_order(order_mat, k, n_real_cells)
+    # Only the top (k+1) neighbours per cell are ever needed (self + k). Compute
+    # them with a kNN (query=real, index=all) — O(N·k) — instead of the old
+    # O(N²) full cdist distance matrix, which OOMs on large atlases.
+    order_mat = _ordered_neighbor_matrix(
+        pca_coord, n_real_cells, n_neighbors=min(k + 1, nCells),
+        knn_fn=knn_fn, knn_backend=knn_backend,
+    )
+    pANN = _compute_pann_from_order(order_mat, k, n_real_cells)
 
     neighbor_types = None
     if annotations is not None:
@@ -348,6 +373,9 @@ def param_sweep(
     n_real_cells: int | None = None,
     pN_grid: np.ndarray | None = None,
     pK_grid: np.ndarray | None = None,
+    knn_fn=None,
+    knn_backend: str = "auto",
+    progress: bool = True,
 ) -> list[SweepEntry]:
     """Python port of R's ``paramSweep``.
 
@@ -381,7 +409,15 @@ def param_sweep(
     pK_grid = _filter_pk_grid(np.asarray(pK_grid, dtype=np.float64), n_real_cells)
 
     out: list[SweepEntry] = []
-    for pN in pN_grid:
+    _pn_iter = pN_grid
+    if progress:
+        try:
+            from tqdm.auto import tqdm
+            _pn_iter = tqdm(pN_grid, total=len(pN_grid),
+                            desc="DoubletFinder: pN sweep", leave=False)
+        except Exception:
+            pass
+    for pN in _pn_iter:
         if float(pN) not in {float(k) for k in pca_embeddings}:
             raise KeyError(
                 f"pca_embeddings is missing entry for pN={pN}; expected keys {list(pca_embeddings)}"
@@ -393,7 +429,14 @@ def param_sweep(
             dtype=np.float64,
         )
         nCells = pca_coord.shape[0]
-        order_mat = _ordered_neighbor_matrix(pca_coord, n_real_cells)
+        # Compute the ordering once for the largest k the pK grid needs, then
+        # reuse (slice top-k) for every pK — a single kNN instead of the old
+        # O(N²) full distance matrix.
+        max_k = int(round(nCells * float(np.max(pK_grid))))
+        order_mat = _ordered_neighbor_matrix(
+            pca_coord, n_real_cells, n_neighbors=min(max_k + 1, nCells),
+            knn_fn=knn_fn, knn_backend=knn_backend,
+        )
         for pK in pK_grid:
             k = int(round(nCells * pK))
             if k < 1:
