@@ -50,42 +50,79 @@ def model_homotypic(annotations) -> float:
 # ---------------------------------------------------------------------------
 # pANN kernel — the single place where neighborhood counts are computed
 # ---------------------------------------------------------------------------
-def _compute_knn(pca, n_neighbors, knn_fn=None, knn_backend="auto"):
-    """Top-``n_neighbors`` nearest neighbours of every row of ``pca`` (self at
-    column 0). Returns ``(dist, idx)`` both ``(n, n_neighbors)``, distance-sorted.
+def _knn_r_order(x, n_query, n_neighbors, sort=True):
+    """The first ``n_neighbors`` cells in R's ``order(dist.mat[, i])`` for each of the first
+    ``n_query`` rows of ``x``: the cell itself, then by Euclidean distance, ties by cell index.
 
-    Backends: an injectable ``knn_fn(X, n_neighbors)->(dist, idx)`` (e.g.
-    omicverse's chunked-GPU kNN — **exact**, avoids the O(N²) distance matrix);
-    ``'auto'`` uses exact sklearn below ~10^5 rows and approximate pynndescent
-    (O(N log N)) above, so million-cell atlases stay tractable.
+    Distances are the expanded ``|a|^2 + |b|^2 - 2ab`` (one BLAS product per block of query rows).
+    With ``sort=False`` only column 0 (the cell itself) is in place and the other columns are the
+    right set in any order, which is all a single pANN needs.
     """
-    pca = np.asarray(pca, dtype=np.float32)
+    x = np.asarray(x, dtype=np.float64)
+    n = x.shape[0]
+    kk = int(min(n_neighbors, n))
+    sq = np.einsum("ij,ij->i", x, x)
+    block = int(max(1, min(n_query, 2 ** 25 // max(n, 1))))
+    out = np.empty((n_query, kk), dtype=np.int64)
+    for s in range(0, n_query, block):
+        e = min(s + block, n_query)
+        g = sq[s:e, None] + sq[None, :] - 2.0 * (x[s:e] @ x.T)
+        rows = np.arange(e - s)
+        g[rows, s + rows] = -np.inf                          # distance 0 to itself comes first
+        if kk < n:
+            cand = np.argpartition(g, (0, kk - 1), axis=1)[:, :kk]
+        else:
+            cand = np.broadcast_to(np.arange(n), g.shape)
+        if sort:
+            gc = np.take_along_axis(g, cand, 1)
+            o = np.argsort(gc, axis=1)
+            cand, gc = np.take_along_axis(cand, o, 1), np.take_along_axis(gc, o, 1)
+            tied = np.flatnonzero((np.diff(gc, axis=1) == 0).any(axis=1))
+            if tied.size:                                    # equal distances: lower index first
+                o = np.lexsort((cand[tied], gc[tied]), axis=1)
+                cand[tied] = np.take_along_axis(cand[tied], o, 1)
+        out[s:e] = cand
+    return out
+
+
+def _compute_knn(pca, n_neighbors, knn_fn=None, knn_backend="auto", n_query=None, sort=True):
+    """Top-``n_neighbors`` neighbours of the first ``n_query`` rows of ``pca`` (self first).
+
+    Backends: ``'exact'`` (default up to 10^5 rows) reproduces R's neighbour order including ties;
+    ``'pynndescent'`` (approximate, O(N log N)) keeps million-cell atlases tractable; an injectable
+    ``knn_fn(X, n_neighbors) -> (dist, idx)`` (e.g. omicverse's chunked-GPU kNN) is used as given.
+    Returns the index matrix ``(n_query, n_neighbors)``.
+    """
+    pca = np.asarray(pca)
     n = pca.shape[0]
+    n_query = n if n_query is None else int(n_query)
     n_neighbors = int(min(n_neighbors, n))
     if knn_fn is not None:
-        dist, idx = knn_fn(pca, n_neighbors)
-        return np.asarray(dist), np.asarray(idx)
+        _, idx = knn_fn(np.asarray(pca, dtype=np.float32), n_neighbors)
+        return np.asarray(idx)[:n_query]
     backend = knn_backend
     if backend == "auto":
-        backend = "pynndescent" if n > 100000 else "sklearn"
+        backend = "pynndescent" if n > 100000 else "exact"
     if backend == "pynndescent":
         try:
             from pynndescent import NNDescent
-            index = NNDescent(pca, n_neighbors=n_neighbors, metric="euclidean",
-                              random_state=0, low_memory=True)
+            index = NNDescent(np.asarray(pca, dtype=np.float32), n_neighbors=n_neighbors,
+                              metric="euclidean", random_state=0, low_memory=True)
             idx, dist = index.neighbor_graph
-            o = np.argsort(dist, axis=1)
-            return np.take_along_axis(dist, o, 1), np.take_along_axis(idx, o, 1)
+            o = np.argsort(dist, axis=1, kind="stable")
+            return np.take_along_axis(idx, o, 1)[:n_query]
         except Exception:
-            backend = "sklearn"
-    from sklearn.neighbors import NearestNeighbors
-    nn = NearestNeighbors(n_neighbors=n_neighbors, metric="euclidean").fit(pca)
-    return nn.kneighbors(pca, return_distance=True)
+            backend = "exact"
+    if backend == "sklearn":
+        from sklearn.neighbors import NearestNeighbors
+        nn = NearestNeighbors(n_neighbors=n_neighbors, metric="euclidean").fit(pca)
+        return nn.kneighbors(pca[:n_query], return_distance=False)
+    return _knn_r_order(pca, n_query, n_neighbors, sort=sort)
 
 
 def _ordered_neighbor_matrix(pca_coord: np.ndarray, n_real_cells: int,
                              n_neighbors=None, knn_fn=None,
-                             knn_backend: str = "auto") -> np.ndarray:
+                             knn_backend: str = "auto", sort: bool = True) -> np.ndarray:
     """Neighbour-ordering matrix for the first ``n_real_cells`` cells, 1-based
     (row 0 = the cell itself). Shape ``(n_neighbors, n_real_cells)``.
 
@@ -98,12 +135,12 @@ def _ordered_neighbor_matrix(pca_coord: np.ndarray, n_real_cells: int,
     if n_neighbors is None:
         from scipy.spatial.distance import cdist
         dist = cdist(pca_coord, pca_coord[:n_real_cells], metric="euclidean")
-        return np.argsort(dist, axis=0, kind="stable") + 1
+        return np.argsort(dist, axis=0, kind="stable") + 1   # R order(): ties by index
     # Self-kNN over all cells; keep only the real-cell rows and lay them out
     # column-per-real-cell (1-based) to match the legacy order-matrix contract.
-    _, idx = _compute_knn(pca_coord, n_neighbors, knn_fn=knn_fn,
-                          knn_backend=knn_backend)
-    return idx[:n_real_cells].T.astype(np.int64) + 1
+    idx = _compute_knn(pca_coord, n_neighbors, knn_fn=knn_fn, knn_backend=knn_backend,
+                       n_query=n_real_cells, sort=sort)
+    return idx.T.astype(np.int64) + 1
 
 
 def _compute_pann_from_order(
@@ -236,9 +273,10 @@ def doublet_finder(
     # Only the top (k+1) neighbours per cell are ever needed (self + k). Compute
     # them with a kNN (query=real, index=all) — O(N·k) — instead of the old
     # O(N²) full cdist distance matrix, which OOMs on large atlases.
+    # A single k needs the set of k neighbours only, not their order.
     order_mat = _ordered_neighbor_matrix(
         pca_coord, n_real_cells, n_neighbors=min(k + 1, nCells),
-        knn_fn=knn_fn, knn_backend=knn_backend,
+        knn_fn=knn_fn, knn_backend=knn_backend, sort=False,
     )
     pANN = _compute_pann_from_order(order_mat, k, n_real_cells)
 
