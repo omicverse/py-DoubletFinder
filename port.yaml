@@ -11,21 +11,21 @@ domain: single-cell   # single-cell | spatial | trajectory | bulk | proteomics |
 upstream:
   name: "DoubletFinder"
   source: "GitHub"   # CRAN | Bioconductor | GitHub | other
-  version: null   # TODO: upstream version the parity test was run against
+  version: "2.0.6"
   url: "https://github.com/chris-mcginnis-ucsf/DoubletFinder"
-  license: null   # TODO: upstream R package license (GPL-3, MIT, Artistic-2.0, …)
+  license: "CC0"
   citation: "McGinnis et al., Cell Systems 2019"
 omicverse:
-  module: "ov.single.DoubletFinder"
+  module: "ov.pp.qc(doublets_method='doubletfinder')"
   since: null
 parity:
-  status: unverified   # pass | partial | unverified
-  algorithm_class: null   # TODO: see omicverse-rebuildr/PARITY_TAXONOMY.md
-  metric: null   # TODO: pearson | spearman | ari | jaccard | max_abs_diff | …
-  threshold: null
-  value: null   # TODO: measured value on the canonical fixture
-  fixture: null
-  test: "tests/test_exact_match.py"
+  status: pass   # same artificial doublets for the same seed (R's RNG), same pK, pANN and calls
+  algorithm_class: stochastic-seeded   # R Mersenne-Twister + sample() reproduced; Seurat 5 preprocessing ported
+  metric: identical pANN / calls at the same seed; loess fit max_abs_diff
+  threshold: "calls identical; pANN identical except genes tied up to rounding at the 2,000-HVG cut-off"
+  value: "16 Xi & Li datasets, 2 seeds: same pK in 32/32 runs, 99.99% of cells identical pANN, calls identical"
+  fixture: "Xi & Li (2021) J293t-dm, 500 cells x 3,000 genes"
+  test: "tests/test_r_reference.py"
 artifacts:
   audit: null
   report: null

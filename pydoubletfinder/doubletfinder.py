@@ -9,6 +9,11 @@ Usage
 >>> df.param_sweep(PCs=10)          # populates df.sweep_stats, df.bcmvn
 >>> df.find_pK()                    # chooses optimal pK
 >>> df.run(pN=0.25, nExp=200)       # populates adata.obs pANN / classifications
+
+Random draws follow R. Seurat's ``RunPCA`` calls ``set.seed(42)``, so in R the artificial doublets
+of ``paramSweep`` (after its first pN) and of ``doubletFinder`` come from that state; with
+``random_state=None`` (default) the same holds here, and the doublets equal R's. An integer
+``random_state`` plays the role of ``set.seed(random_state)`` before ``paramSweep``/``doubletFinder``.
 """
 from __future__ import annotations
 
@@ -20,7 +25,8 @@ import scipy.sparse as sp
 from anndata import AnnData
 
 from . import core as _core
-from .preprocessing import preprocess_and_pca
+from .rrng import RRandom
+from .seurat import preprocess
 
 
 class Colors:
@@ -42,22 +48,40 @@ class DoubletFinder:
 
     adata: AnnData
     layer: str | None = None  # which adata layer holds raw counts (None = .X)
-    random_state: int = 0
+    random_state: int | None = None   # None: R's state after Seurat RunPCA; int: set.seed()
 
     # populated as the pipeline runs
     sweep_list: list = field(default_factory=list, init=False)
     sweep_stats: pd.DataFrame | None = field(default=None, init=False)
     bcmvn: pd.DataFrame | None = field(default=None, init=False)
     optimal_pK: float | None = field(default=None, init=False)
+    _rng: RRandom | None = field(default=None, init=False, repr=False)
 
     # --- internal helpers ---------------------------------------------------
-    def _counts_gene_by_cell(self) -> np.ndarray:
-        """Return a genes x cells dense counts matrix (Seurat orientation)."""
+    def _counts_gene_by_cell(self) -> sp.csc_matrix:
+        """Return the genes x cells counts (Seurat orientation), sparse."""
         mat = self.adata.layers[self.layer] if self.layer is not None else self.adata.X
-        if sp.issparse(mat):
-            mat = mat.toarray()
-        # anndata stores cells x genes; transpose to genes x cells
-        return np.asarray(mat).T.astype(np.float64)
+        return sp.csc_matrix(mat, dtype=np.float64).T.tocsc()
+
+    def _stream(self, n_features: int) -> RRandom:
+        """The R random stream: continues across calls, starts as R would."""
+        if self._rng is None:
+            self._rng = RRandom()
+            if self.random_state is None:
+                self._rng.after_seurat_pca(n_features)
+            else:
+                self._rng.set_seed(self.random_state)
+        return self._rng
+
+    def _merged_pca(self, counts, n_real, pN, PCs, n_top_genes, rng):
+        """R parallel_paramSweep / doubletFinder: sample parents, average, Seurat PCA."""
+        n_doublets = int(round(n_real / (1.0 - pN) - n_real))
+        c1 = rng.sample(n_real, n_doublets, replace=True)
+        c2 = rng.sample(n_real, n_doublets, replace=True)
+        merged = sp.hstack([counts, (counts[:, c1] + counts[:, c2]) / 2.0]).tocsr()
+        emb = preprocess(merged, n_pcs=PCs, n_features=n_top_genes)
+        rng.after_seurat_pca(min(n_top_genes, merged.shape[0]))       # RunPCA(seed.use = 42)
+        return emb, c1, c2
 
     # --- steps --------------------------------------------------------------
     def param_sweep(
@@ -82,19 +106,17 @@ class DoubletFinder:
         ``SweepEntry`` list yourself with PCA embeddings + cell index pairs
         from R, and assign it to ``self.sweep_list``.
         """
-        rng = np.random.default_rng(self.random_state)
         counts = self._counts_gene_by_cell()
+        rng = self._stream(n_top_genes)
         n_cells_total = counts.shape[1]
 
-        # Subsample real cells if above the R threshold
+        # Down-sample to max_cells as R does (sample(), order kept)
         if n_cells_total > max_cells:
-            real_idx = rng.choice(n_cells_total, size=max_cells, replace=False)
-            real_idx = np.sort(real_idx)
+            real_idx = rng.sample(n_cells_total, max_cells, replace=False)
             counts = counts[:, real_idx]
-            cell_names = self.adata.obs_names[real_idx].to_numpy()
         else:
             real_idx = np.arange(n_cells_total)
-            cell_names = self.adata.obs_names.to_numpy()
+        cell_names = self.adata.obs_names[real_idx].to_numpy()
         n_real = counts.shape[1]
 
         pN_grid = _core.DEFAULT_PN_GRID if pN_grid is None else np.asarray(pN_grid)
@@ -104,18 +126,7 @@ class DoubletFinder:
         pca_embeddings: dict[float, np.ndarray] = {}
         for pN in pN_grid:
             _log(f"[paramSweep] pN={pN:g} — generating artificial doublets & PCA")
-            c1, c2, n_doublets = _core.sample_artificial_doublets(
-                n_real_cells=n_real, pN=float(pN), rng=rng
-            )
-            doublets = (counts[:, c1] + counts[:, c2]) / 2.0
-            merged = np.concatenate([counts, doublets], axis=1)
-            emb = preprocess_and_pca(
-                merged,
-                n_pcs=PCs,
-                n_top_genes=n_top_genes,
-                random_state=self.random_state,
-            )
-            pca_embeddings[float(pN)] = emb
+            pca_embeddings[float(pN)], _, _ = self._merged_pca(counts, n_real, float(pN), PCs, n_top_genes, rng)
 
         self.sweep_list = _core.param_sweep(
             pca_embeddings=pca_embeddings,
@@ -179,17 +190,10 @@ class DoubletFinder:
                 reuse_pANN=pann,
             )
         else:
-            rng = np.random.default_rng(self.random_state)
             counts = self._counts_gene_by_cell()
             n_real = counts.shape[1]
-
-            c1, c2, _ = _core.sample_artificial_doublets(n_real_cells=n_real, pN=pN, rng=rng)
-            doublets = (counts[:, c1] + counts[:, c2]) / 2.0
-            merged = np.concatenate([counts, doublets], axis=1)
-            emb = preprocess_and_pca(
-                merged, n_pcs=PCs, n_top_genes=n_top_genes,
-                random_state=self.random_state,
-            )
+            rng = self._stream(n_top_genes)
+            emb, c1, c2 = self._merged_pca(counts, n_real, pN, PCs, n_top_genes, rng)
 
             ann_vec = None
             d1 = d2 = None

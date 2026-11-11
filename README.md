@@ -5,9 +5,9 @@ A **pure-Python re-implementation of [DoubletFinder](https://github.com/chris-mc
 - AnnData-native — drop-in for the scanpy ecosystem
 - **No `rpy2`**, no R install — the full pN/pK sweep, bimodality coefficient, BCmvn, and pANN scoring are all implemented directly in NumPy/SciPy
 - Same function surface as the R workflow (`paramSweep` → `summarizeSweep` → `find.pK` → `doubletFinder`)
-- Bit-for-bit reproducibility against the R reference when fed matching PCA embeddings + artificial-doublet cell pairs (see `tests/test_exact_match.py`)
+- Same seed, same result as R DoubletFinder 2.0.6: R's random draws and Seurat 5's preprocessing are reproduced, so the artificial doublets, chosen pK, pANN and calls match (see [Relationship to R DoubletFinder](#relationship-to-r-doubletfinder))
 
-> This is a **standalone mirror** of the canonical implementation that lives in [`omicverse`](https://github.com/Starlitnightly/omicverse) (`omicverse.single.DoubletFinder`). All algorithmic work is developed upstream in omicverse and synced here for users who want DoubletFinder without the full omicverse stack.
+> omicverse uses this package for `ov.pp.qc(doublets_method='doubletfinder')`.
 
 ## Install
 
@@ -77,28 +77,35 @@ homotypic = model_homotypic(adata.obs["cluster"])
 | `bkde`, `approxfun` | `KernSmooth::bkde`, `stats::approxfun` | KernSmooth-compatible KDE + R approxfun |
 | `sample_artificial_doublets` | internal | expose doublet-pair sampling for reproducibility |
 
-## Reproducing R results exactly
+## Relationship to R DoubletFinder
 
-The pipeline's randomness has two sources: which cell pairs become artificial doublets, and the PCA embedding of the merged matrix. To get identical outputs to an R run, provide both directly:
+Since 0.2.1 the class API follows DoubletFinder 2.0.6 on Seurat 5 step by step:
 
-```python
-from pydoubletfinder import doublet_finder
+- **Preprocessing of every merged real + artificial matrix** as Seurat's defaults:
+  LogNormalize, `FindVariableFeatures(vst)` (including R's `loess` with its interpolated surface),
+  `ScaleData` (clipped above at 10) and the PCA cell embeddings (`pydoubletfinder.seurat`).
+- **Random draws** from R's generator (`pydoubletfinder.rrng`): Mersenne-Twister seeded as
+  `set.seed`, `sample()` by rejection sampling. Seurat's `RunPCA` calls `set.seed(42)`, so in R
+  the artificial doublets after the first pN of `paramSweep`, and those of `doubletFinder`, come
+  from that state. `DoubletFinder(adata, random_state=None)` (default) starts from the same state;
+  `random_state=s` plays the role of `set.seed(s)` before `paramSweep`.
+- **Neighbour order** as R's `order()`: Euclidean distance, ties by cell index.
 
-result = doublet_finder(
-    pca_coord=r_pca_embedding,      # from Seurat's reductions$pca@cell.embeddings
-    n_real_cells=len(real_cells),
-    pN=0.25, pK=0.09, nExp=250,
-)
-```
+With the same seed, pydoubletfinder therefore draws the same artificial doublets as R and returns
+the same pANN values and calls. The one step that is not reproduced bit for bit is the loess fit
+of `FindVariableFeatures` (R's LINPACK QR differs from NumPy's SVD in the last bits): genes whose
+standardised variances are equal up to rounding can swap at the 2,000-gene cut-off, which can move
+a few pANN values by one neighbour.
 
-`tests/test_exact_match.py` runs the R reference (`DoubletFinder::paramSweep` + `doubletFinder`) inside the `CMAP` conda env, saves PCA coords and cell-pair indices, and checks that the Python port reproduces the pANN, BCreal, and classification vectors bit-for-bit.
+`tests/test_r_reference.py` checks all of this against stored output of DoubletFinder 2.0.6 /
+Seurat 5.5.1 (no R needed): R's random numbers and artificial-doublet parents, the loess fit
+(< 1e-12), the variable genes, the chosen pK, and pANN and calls of the full workflow.
 
-## Relationship to omicverse
+## Use in omicverse
 
-Developed **upstream** in [`omicverse`](https://github.com/Starlitnightly/omicverse):
-
-- Canonical implementation: `omicverse.single.DoubletFinder`
-- Standalone mirror (this repo): same code, same API, minus the omicverse packaging
+pydoubletfinder is one of the doublet detectors of omicverse quality control:
+`ov.pp.qc(adata, doublets_method='doubletfinder')` runs it on the raw counts, once per sample when
+`batch_key` is given.
 
 ## Citation
 

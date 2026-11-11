@@ -1,10 +1,9 @@
 """
 pydoubletfinder: Pure-Python DoubletFinder for scRNA-seq doublet detection.
 
-A standalone mirror of the canonical implementation that lives in
-``omicverse.single.DoubletFinder``. This repo exists for users who want
-DoubletFinder without pulling in the full omicverse stack — all
-algorithmic work is developed upstream in omicverse and synced here.
+Follows DoubletFinder 2.0.6 on Seurat 5 step by step, including R's random draws, so the
+same seed gives the same artificial doublets, pANN and calls as R. Used by omicverse for
+``ov.pp.qc(doublets_method='doubletfinder')``.
 
 Input: AnnData objects (cells x genes). All analysis state is written to
 ``adata.obs`` and ``adata.uns['doubletfinder']`` so the annotated object
@@ -46,7 +45,7 @@ from .core import (
 from .doubletfinder import DoubletFinder
 from .kde import BKDEResult, approxfun, bkde
 
-__version__ = "0.1.0"
+__version__ = "0.2.1"
 
 __all__ = [
     # class API
